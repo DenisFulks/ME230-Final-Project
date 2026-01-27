@@ -14,6 +14,6 @@ void loop() {
   if (!digitalRead(23)){
     claw.write(0);
   } else {
-    claw.write(90);
+    claw.write(180);
   }
 }
