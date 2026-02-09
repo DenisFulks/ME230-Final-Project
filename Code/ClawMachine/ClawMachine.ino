@@ -11,29 +11,43 @@
 #define spoolDownPin 51
 #define servoPin 2
 
+// Limit Pins
+#define yMinPin 22
+#define yMaxPin 23
+#define xMinPin 24
+#define xMaxPin 25
+
 // Input Pins
 #define pinClaw 21
+#define EStopPin 20
 #define pinJoyX A0
-#define pinJoyY A1 
+#define pinJoyY A1
+#define photoResistorPin A2
 
 // Flags
 volatile uint8_t mainEventFlags = 0x00;
 #define dropClawFlag 1
+#define EStopFlag 2
 
 // Constants
 const uint8_t deadZone = 40;
+const uint8_t photoResistorCutoff = 50;
+const uint8_t maxTime = 20; // Seconds
 
 // Variable Defenitions
 int16_t xVal;
 int16_t yVal;
 int direction[2] = {0, 0};
+bool play = false;
+int16_t startTime;
+int16_t endTime;
 
 // Claw
 Servo claw;
 uint8_t open = 0;
 uint8_t close = 180;
 
-unsigned int downTime = 1.2; // s
+unsigned float downTime = 1.5; // Seconds
 
 void setup() {
   Serial.begin(9600);
@@ -48,20 +62,59 @@ void setup() {
   claw.attach(servoPin);
   claw.write(close);
 
+  // Limit Pins
+  pinMode(xMinPin, INPUT_PULLUP);
+  pinMode(xMaxPin, INPUT_PULLUP);
+  pinMode(yMinPin, INPUT_PULLUP);
+  pinMode(yMaxPin, INPUT_PULLUP);
+
   // Claw Interrupt
   pinMode(pinClaw, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(pinClaw), dropClaw, FALLING);
+
+  // EStop Interrupt
+  pinMode(EStopPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(EStopPin), EStop, FALLING);
+
+  goHome();
 }
 
 void loop() {
-  if (mainEventFlags & dropClawFlag) {
-    Serial.println("Test");
+  if (!play) {
+      if (analogRead(photoResistorPin) < photoResistorCutoff) {
+      while (analogRead(photoResistorPin) < photoResistorCutoff);
 
-    pickup();
+      Serial.println("Play!");
+
+      startTime = millis();
+      endTime = startTime + (maxTime*1000);
+      play = true;
+    }
+  } else { 
+    readJoyStick();
+
+    if (mainEventFlags & dropClawFlag) {
+      pickup();
+      goHome();
+      drop();
+    }
+
+    if ((!digitalRead(xMinPin) && direction[0] < 0) || (!digitalRead(xMaxPin) && direction[0] > 0)) {
+      direction[0] = 0;
+    }
+
+    if ((!digitalRead(yMinPin) && direction[1] < 0) || (!digitalRead(yMaxPin) && direction[1] > 0)) {
+      direction[1] = 0;
+    }
+
+    moveGantry();
+
+    if (startTime + millis() > endTime) {
+      pickup();
+      goHome();
+      drop();
+    }
   }
-
-  readJoyStick();
-  moveGantry();
 }
 
 void readJoyStick() {
@@ -72,9 +125,9 @@ void readJoyStick() {
   yVal = map(yVal, 0, 1024, -128, 128);
 
   if (xVal > deadZone) {
-    direction[0] = 1;
-  } else if (xVal < -deadZone) {
     direction[0] = -1;
+  } else if (xVal < -deadZone) {
+    direction[0] = 1;
   } else {
     direction[0] = 0;
   }
@@ -86,8 +139,6 @@ void readJoyStick() {
   } else {
     direction[1] = 0;
   }
-
-  Serial.println(direction[1]);
 }
 
 void moveGantry() {
@@ -134,8 +185,52 @@ void pickup() {
   mainEventFlags &= ~dropClawFlag;
 }
 
+void drop() {
+  claw.write(open);
+  delay(200);
+
+  claw.write(close);
+  delay(100);
+}
+
+void goHome() {
+  while (digitalRead(xMinPin) || digitalRead(yMinPin)) {
+    Serial.println("Going Home");
+
+    if (digitalRead(xMinPin)) {
+      direction[0] = -1;
+    } else {
+      direction[0] = 0;
+    }
+
+    if (digitalRead(yMinPin)) {
+      direction[1] = -1;
+    } else {
+      direction[1] = 1;
+    }
+
+    moveGantry();
+  }
+
+  play = false;
+}
+
 void dropClaw() {
   if (!(mainEventFlags & dropClawFlag)) {
     mainEventFlags |= dropClawFlag;
   }
+}
+
+void EStop() {
+  if (mainEventFlags & EStopFlag) {
+    Serial.println("Starting");
+
+    mainEventFlags &= ~EStopFlag;
+  } else {
+    Serial.println("Stopping");
+
+    mainEventFlags |= EStopFlag;
+  }
+
+  delay(1000);
 }
